@@ -10,13 +10,49 @@ import Data.Proxy
 import Foreign.Storable
 import Linear
 
+class ColorSpace cs where
+    fromLinear :: Proxy cs -> Float -> Float
+    toLinear :: Proxy cs -> Float -> Float
+
+newtype Converter a b = Converter { converterFun :: Float -> Float }
+
+converter :: forall a b. (ColorSpace a, ColorSpace b) => Converter a b
+converter = Converter (fromLinear (Proxy :: Proxy b) . toLinear (Proxy :: Proxy a))
+
 data Linear
+
+instance ColorSpace Linear where
+    fromLinear = const id
+    toLinear = const id
+
 data SRGB
+
+instance ColorSpace SRGB where
+    fromLinear _ v
+        | v <= 0.0031308 = v * 12.92
+        | otherwise = (1 + a) * (v ** (1 / 2.4)) - a
+        where
+            a = 0.055
+    toLinear _ v
+        | v <= 0.0031308 = v * (1 / 12.92)
+        | otherwise = ((v + a) * (1 / (1 + a))) ** 2.4
+        where
+            a = 0.055
+
+class Color a where
+    toRGB :: a cs -> RGB cs
+    applyConverter :: (ColorSpace cs0, ColorSpace cs1) => Converter cs0 cs1 -> a cs0 -> a cs1 
+
+convert :: (Color a, ColorSpace csa, ColorSpace csb) => a csa -> a csb
+convert = applyConverter converter
 
 newtype RGB cs = RGB { rgbColor :: V3 Float } deriving (Eq, Show, Read, Storable, Num, Fractional, Epsilon)
 
 linearRGB :: Float -> Float -> Float -> RGB Linear
 linearRGB r g b = RGB $ V3 r g b
+
+sRGB :: Float -> Float -> Float -> RGB SRGB
+sRGB r g b = RGB $ V3 r g b
 
 _rgbVec :: Lens' (RGB cs) (V3 Float)
 _rgbVec = lens rgbColor (\_ vec -> RGB vec)
@@ -30,10 +66,17 @@ _g = _rgbVec . _y
 _b :: Lens' (RGB cs) Float
 _b = _rgbVec . _z
 
+instance Color RGB where
+    toRGB = id
+    applyConverter (Converter f) c = c { rgbColor = f <$> rgbColor c }
+
 newtype HSV cs = HSV { hsvColor :: V3 Float } deriving (Eq, Show, Read, Storable, Num, Fractional, Epsilon)
 
 linearHSV :: Float -> Float -> Float -> HSV Linear
 linearHSV h s v = HSV $ V3 (h `mod'` 360) s v
+
+sRGBHSV :: Float -> Float -> Float -> HSV SRGB
+sRGBHSV h s v = HSV $ V3 (h `mod'` 360) s v
 
 _hsvVec :: Lens' (HSV cs) (V3 Float)
 _hsvVec = lens hsvColor (\_ vec -> HSV vec)
@@ -46,42 +89,6 @@ _s = _hsvVec . _y
 
 _v :: Lens' (HSV cs) Float
 _v = _hsvVec . _z
-
-class Gamma cs where
-    fromLinearGamma :: Proxy cs -> Float -> Float
-    toLinearGamma :: Proxy cs -> Float -> Float
-
-newtype Converter a b = Converter { converterFun :: Float -> Float }
-
-converter :: forall a b. (Gamma a, Gamma b) => Converter a b
-converter = Converter (fromLinearGamma (Proxy :: Proxy b) . toLinearGamma (Proxy :: Proxy a))
-
-instance Gamma Linear where
-    fromLinearGamma = const id
-    toLinearGamma = const id
-
-instance Gamma SRGB where
-    fromLinearGamma _ v
-        | v <= 0.0031308 = v * 12.92
-        | otherwise = (1 + a) * (v ** (1 / 2.4)) - a
-        where
-            a = 0.055
-    toLinearGamma _ v
-        | v <= 0.0031308 = v * (1 / 12.92)
-        | otherwise = ((v + a) * (1 / (1 + a))) ** 2.4
-        where
-            a = 0.055
-
-class Color a where
-    toRGB :: a cs -> RGB cs
-    applyConverter :: (Gamma cs0, Gamma cs1) => Converter cs0 cs1 -> a cs0 -> a cs1 
-
-convert :: (Color a, Gamma csa, Gamma csb) => a csa -> a csb
-convert = applyConverter converter
-
-instance Color RGB where
-    toRGB = id
-    applyConverter (Converter f) c = c { rgbColor = f <$> rgbColor c }
 
 instance Color HSV where
     toRGB (HSV (V3 h s v)) = RGB $ fmap (+ m) base
